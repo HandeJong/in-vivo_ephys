@@ -43,8 +43,16 @@ indexer = tetrode.cells == cell_number;
 interval = 10^6/tetrode.raw_data.hdr.SamplingFrequency; %µs
 timeline = [0:interval:1000-interval]';
 
+% Figure out the displayfraction (to preserve system resources)
+cutoff = tetrode.settings.disp_cutoff;
+if sum(indexer)>cutoff
+    disp_fraction = cutoff/sum(indexer);
+     disp(['Showing ' num2str(disp_fraction*100) '% of waveforms.'])
+else
+    disp_fraction = 1;
+end
+
 % 4 subplots for 4 electrodes
-disp_fraction = 100;
 [main_figure, histogram_figure] = tetrode.show_cell(cell_number, 'fraction', disp_fraction);
 close(histogram_figure);
 
@@ -120,12 +128,12 @@ function key_press(scr, ev)
             case 'a' % show a higher fraction of waveforms
                 disp_fraction = disp_fraction * 2;
                 if disp_fraction>100; disp_fraction = 100; end
-                disp(['Showing ' num2str(disp_fraction) '% of waveforms.'])
+                disp(['Showing ' num2str(disp_fraction*100) '% of waveforms.'])
                 replace_figure();
             
             case 'z' % show a smaller fraction of waveforms
                 disp_fraction = disp_fraction * 0.5;
-                disp(['Showing ' num2str(disp_fraction) '% of waveforms.'])
+                disp(['Showing ' num2str(disp_fraction*100) '% of waveforms.'])
                 replace_figure();
                 
             otherwise

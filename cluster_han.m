@@ -161,7 +161,7 @@ main_figure.WindowKeyPressFcn = @key_press;
 
 
 % Make the main figure bigger
-main_figure.Position(3:4) = [1600, 500];
+main_figure.Position = [140, 150, 1600, 500];
 
 
 % Plot the polygon that the user can manipulate to lock-in datapoitns

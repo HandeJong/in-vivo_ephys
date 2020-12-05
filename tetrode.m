@@ -56,6 +56,7 @@ classdef tetrode<handle
         timestamps      % Timestamps of the waveforms in data (n)
         cells           % Clustered units(n);
         nr_cells        % The total number of clustered units
+        TTL             % Imported TTL arrays (struct)
         handles         % Handles to figures and plots
         settings        % Struct with settings.
         notes           % Notes for 
@@ -63,13 +64,40 @@ classdef tetrode<handle
     
     % Standard methods
     methods
-        function obj = tetrode(filename)
+        function obj = tetrode(filename, varargin)
             %TETRODE Construct an instance of this class
-            %   Uses Fieldtrip m files to import a tetrode file
             
+            
+            % Deal with input arguments
+            supress = false;
+            for i = 1:length(varargin)
+                
+                switch varargin{i}
+                    
+                    case 'supress'
+                        % Supress messages and errors
+                        supress = true;
+                    
+                    case 'skipp'
+                        % do nothing
+                        
+                    otherwise
+                        warning(['Input: ' varargin{i} ' not recognized.'])   
+                end
+            end
+            
+            % Check the filesize
+            file_info = dir(filename);
+            filesize = round(file_info.bytes/10^6); %in MB
+            if filesize > 100 && ~supress
+                % Ask the user if they are sure
+                input = questdlg([filename ' is ' num2str(filesize) ' MB. opening might take some time.'],...
+                    'Big file','Continue','Cancel','Cancel');
+                if ~strcmp(input,'Continue'); disp('No file opened.'); return; end
+            end
+                  
+            % Uses Fieldtrip m files to import a tetrode file
             obj.raw_data = read_neuralynx_ntt(filename, 1, inf);
-            
-            % MOVE ALL THIS TO SEPARATE FUNCTION!
             
             % Grab the data
             obj.data = obj.raw_data.dat;
@@ -164,6 +192,10 @@ classdef tetrode<handle
             [~, show_electrodes] = sort(devs, 'descend');
             show_electrodes = sort(show_electrodes(1:3));
             obj.settings.preferred_electrodes = show_electrodes;
+            
+            % Load any associated event file
+            path = fileparts(filename);
+            obj.load_events(path);
             
             % That's it
         end
@@ -332,6 +364,8 @@ classdef tetrode<handle
                 close(figure_1)
                 close(figure_2)
             else
+                warning('Removing waveforms without waiting for user input.');
+                disp('To request user input before removing waveforms, set obj.settings.remove_check to true');
                  % Mark these sweeps nan
                 obj.cells(indexer) = nan;
 
@@ -409,7 +443,7 @@ classdef tetrode<handle
                                 % Plot average waveform instead of all
                                 % waveforms
                                 plot_average = true;
-                            
+
                             otherwise
                                 % We really not know, let the user know
                                 disp(' ')
@@ -473,7 +507,9 @@ classdef tetrode<handle
                 end
                 scatter3(XYZ(channel(1),indexer{i+1}), XYZ(channel(2),indexer{i+1}), XYZ(channel(3),indexer{i+1}),...
                     'DisplayName', dataname{i+1},...
-                    'MarkerEdgeColor',colorlist(i+1));
+                    'MarkerEdgeColor',colorlist(i+1),...
+                    'Marker','.',...
+                    'SizeData',25);
                 hold on
             end
             
@@ -481,7 +517,9 @@ classdef tetrode<handle
             if plot_nan
                 scatter3(XYZ(channel(1),isnan(obj.cells)), XYZ(channel(2),isnan(obj.cells)), XYZ(channel(3),isnan(obj.cells)),...
                     'DisplayName', 'removed waveforms',...
-                    'MarkerEdgeColor',colorlist(1)) 
+                    'MarkerEdgeColor',colorlist(1),...
+                    'Marker','.',...
+                    'SizeData',1) ;
             end
            
             % Label figure and axis
@@ -587,7 +625,7 @@ classdef tetrode<handle
                         
                     % Plot only a fraction of the waveforms    
                     case 'fraction'
-                        disp_fraction = round(100/varargin{i+1});
+                        disp_fraction = varargin{i+1};
                         varargin{i+1} = 'skipp';
                         
                     otherwise
@@ -618,16 +656,20 @@ classdef tetrode<handle
             % to maintain performance
             cutoff = obj.settings.disp_cutoff;
             original_indexer = indexer; % To be used for histogram for instance
-            if sum(indexer)>cutoff && disp_fraction ==1
-                disp_fraction = 20;
-                disp(['Showing only 5% (n = ' num2str(sum(indexer==1)) ') of all waveforms.'])
+            if sum(indexer)>cutoff && disp_fraction == 1
+                disp_fraction = 0.05;
+                disp(['Showing only 5% (n = ' num2str(sum(indexer==1)*disp_fraction) ') of all waveforms.'])
             end
+            
+            % If the disp_fraction is >1, set it to 1
+            if disp_fraction>1; disp_fraction=1; end
             
             % This is to plot only a certain fraction of all waveforms,
             % either because there are more waveforms than the cutoff or
             % because the user specifically requested it.
             new_indexer = zeros(size(indexer));
-            new_indexer(1:disp_fraction:end) = indexer(1:disp_fraction:end);
+            sample = randsample([1:length(indexer)], round(length(indexer)*disp_fraction));
+            new_indexer(sample) = indexer(sample);
             indexer = logical(new_indexer);
             
             % How to name the figure
@@ -938,6 +980,7 @@ classdef tetrode<handle
                     % Substract the trial from the input data to get the
                     % difference
                     temp_data = units{i} - stamps(j-1);
+                    temp_data = temp_data(temp_data>-1*window & temp_data<window);
 
                     % for every bin
                     for k = 1:length(timeline)
@@ -1021,7 +1064,7 @@ classdef tetrode<handle
                 ylabel('Events (Hz)')
                 
                 % There is no need for the yaxis ever to be below 0
-                temp = ylim(); temp(1) = max([0, temp(1)]); ylim(temp);
+                %temp = ylim(); temp(1) = max([0, temp(1)]); ylim(temp);
                 
             end
             
@@ -1118,49 +1161,44 @@ classdef tetrode<handle
             main_figure = figure();
             main_figure.Position(3:4) = [1200, 400];
             subplot(1,3,1)
-            scatter(score(:,1), score(:,2));
+            scatter(score(:,1), score(:,2), 'Marker', '.');
             xlabel('1st Principal Component')
             ylabel('2nd Principal Component')
             subplot(1,3,2)
-            scatter(score(:,1), score(:,3));
+            scatter(score(:,1), score(:,3), 'Marker', '.');
             xlabel('1st Principal Component')
             ylabel('3nd Principal Component')
             subplot(1,3,3)
-            scatter(score(:,2), score(:,3));
+            scatter(score(:,2), score(:,3), 'Marker', '.');
             xlabel('2st Principal Component')
             ylabel('3nd Principal Component')
             
             % Plot scatter3
             figure
-            scatter3(score(:,1),score(:,2),score(:,3))
-            hold on
-            xlabel('1st Principal Component')
-            ylabel('2nd Principal Component')
-            zlabel('3nd Principal Component')
-            
             % Plot identified clusters
-            for i=1:obj.nr_cells
+            for i=0:obj.nr_cells
                 indexer = obj.cells==i;
-                scatter3(score(indexer,1), score(indexer,2), score(indexer,3))
+                scatter3(score(indexer,1), score(indexer,2), score(indexer,3),...
+                    'Marker', '.', 'SizeData', 1)
+                xlabel('1st Principal Component')
+                ylabel('2nd Principal Component')
+                zlabel('3nd Principal Component')
+                hold on
             end 
         end
         
         function save_data(obj, filename, varargin)
             %SAVE will save the object to a .mat file with the name
-            %'filename'. The input arguments 'small' saves the tetrode
-            %without the raw data sweeps.
+            %'filename'.
             
             % Deal with the input arguments
             for i = 1:length(varargin)
                 
-                small_data = false;
+                
                 switch varargin{i}
                     case 'skipp'
                         % do nothing
                         X=5;
-                        
-                    case 'small'
-                        small_data = true;
                         
                     otherwise
                         disp(['Unknown input arguments: ' varargin{i}]);
@@ -1170,10 +1208,6 @@ classdef tetrode<handle
             
             variable_name = genvarname(filename);
             eval([variable_name '=obj;']);
-            
-            if small_data
-                eval([variable_name '.raw_data = []'])
-            end
             
             
             save(filename, variable_name);
@@ -1277,6 +1311,8 @@ classdef tetrode<handle
                     obj.settings.working_electrodes(i) = true;
                 end
             end
+            
+            
             
         end
         
@@ -1419,7 +1455,8 @@ classdef tetrode<handle
                 [~, max_energy] = max(energy_per_channel);
                 
                 % Find the archetype waveform
-                overview(i).waveform = mean(squeeze(obj.data(max_energy,:,indexer)),2);
+                waveform_raw =  mean(squeeze(obj.data(max_energy,:,indexer)),2);
+                overview(i).waveform = waveform_raw.*obj.settings.ADBitVolts(max_energy)*10^6;
                 
                 % AP width
                 [~, AP_start] = min(overview(i).waveform(1:8));
@@ -1544,6 +1581,104 @@ classdef tetrode<handle
             
         end
         
+        function [results, statistics, figure_handle] = opto_tagged(obj, cell, TTL)
+            % OPTO_TAGGED presents a peri-event histogram from the cell
+            % based on the input TTL channel. Also does the statistics and
+            % shows the waveform difference.
+            
+            cell_indexer = obj.cells == cell;
+            
+            if length(TTL) == 1
+                TTL_name = obj.TTL(TTL).name;
+                TTL = obj.TTL(TTL).on;
+                window_size = 25*10^3;
+                tagged_frame = 10000;
+            else
+                TTL_name = 'No Name';
+                TTL = TTL;
+                window_size = 1000*10^3;
+                tagged_frame = 500000;
+            end
+            
+            % Grab all timepoints close to a TTL stamp
+            time_indexer = false(size(obj.timestamps));
+            for i=1:length(TTL)
+                indexer = (obj.timestamps > TTL(i) & obj.timestamps < TTL(i)+tagged_frame);
+                time_indexer(indexer) = true;
+            end
+            
+            % Only index the waveforms that are part of this unit
+            time_indexer(~cell_indexer) = false;
+            
+            % Peri event
+            [~, results] = obj.peri_event(TTL,...
+                'window', window_size,...
+                'bins', 50,...
+                'cell', cell);
+            
+            % Rename the peri event figure
+            set(gcf, 'Name', TTL_name)
+            
+            % Take a compound waveform and calculate the correlation
+            con_wav_cell = [];
+            con_wav_time = [];
+            for i=1:4
+                if obj.settings.working_electrodes(i)
+                    temp_cell = mean(squeeze(obj.data(i,:,cell_indexer)), 2);
+                    if sum(time_indexer)>1
+                        temp_time = mean(squeeze(obj.data(i,:,time_indexer)), 2);
+                    else
+                        temp_time = squeeze(obj.data(i,:,time_indexer))';
+                    end
+                    con_wav_cell = [con_wav_cell, temp_cell'];
+                    con_wav_time = [con_wav_time, temp_time'];
+                end
+            end
+            
+            % Show the waveform correlation
+            figure
+            plot(con_wav_cell,'DisplayName','Cell');
+            hold on
+            plot(con_wav_time,'DisplayName','Tagged Waveforms');
+            legend();
+            
+            % Do the statistics:
+            baseline_set = [results(2:end,4); results(2:end, 5)];
+            stim_set = [results(2:end,6) ; results(2:end,7)];
+            statistics.baseline = mean(baseline_set);
+            statistics.stimulation = mean(stim_set);
+            [statistics.tagged, statistics.p] = ttest(baseline_set, stim_set);
+            try
+                statistics.pearson_r = corr(con_wav_cell', con_wav_time');
+            catch
+                statistics.pearson_r = nan;
+            end
+            
+            % Find the latency to the peak
+            [~, index] = max(mean(results(2:end,:)));
+            statistics.latency = results(1,index);
+            
+            % Show the tagged waveforms
+            [figure_handle, hist_figure] = obj.show_cell(cell);
+            close(hist_figure)
+            [h_temp, hist_figure] = obj.show_cell(time_indexer, 'hypothetical');
+            close(hist_figure)
+            
+            % Move the tagged waveforms to the original cell figure
+            try
+                for i=1:4
+                    h_temp.Children(i).Children(2).Parent = figure_handle.Children(i);
+                end
+            catch
+                disp(['No tagged waveforms for cell: ' num2str(cell)])
+            end
+            
+            close(h_temp);
+            
+            % Set the figure title
+            disp(['Looking at stamps: ' TTL_name])
+        end
+        
         function remove_raw(obj)
             %REMOVE_RAW removes all raw data. This is sometimes neccesary
             %when there is simply to much raw data and the CPU is unable to
@@ -1574,6 +1709,65 @@ classdef tetrode<handle
             obj.cells(obj.cells==99) = nan;
             
             
+        end
+        
+        function load_events(obj, path)
+            % Should not be neccesary in the future, only a temp function
+            % Load any associated event file
+
+            if ~isempty(path)
+                event_file = [path '/Events.nev'];
+            else
+                event_file = 'Events.nev';
+            end
+            
+            if isfile(event_file)
+                
+                % Load the file
+                disp ('Event file found... importing TTL.')
+                events = read_neuralynx_nev('Events.nev');
+                for i=1:length(events)
+                    pulses(i) = events(i).TimeStamp;
+                    ev_indexer(i) = events(i).TTLValue;
+                end
+                
+                % Make array with all possible TTL types
+                TTL_types = unique(ev_indexer);
+                TTL_types = TTL_types(TTL_types~=0);
+                
+                % Load the data for all TTL types
+                for i=1:length(TTL_types)
+                    obj.TTL(i).type = TTL_types(i);
+                    obj.TTL(i).name = 'no name';
+                    indexer = (ev_indexer == TTL_types(i));
+                    obj.TTL(i).number = sum(indexer);
+                    obj.TTL(i).on = pulses(indexer);
+                    obj.TTL(i).off = pulses([false, indexer(1:end-1)]);
+                    obj.TTL(i).duration = round((obj.TTL(i).off - obj.TTL(i).on)*10^-3);
+                    obj.TTL(i).ave_duration = mean(obj.TTL(i).duration);
+                    intervals = round(([obj.TTL(i).on(2:end) - obj.TTL(i).on(1:end-1)])*10^-3); 
+                    obj.TTL(i).interval = [intervals(1), intervals];
+                    obj.TTL(i).ave_interval = mean(obj.TTL(i).interval);
+                end
+                
+            end   
+        end
+        
+        function waveform = grab_waveform(obj, cell)
+            
+            % Make the indexer
+            indexer = obj.cells == cell;
+
+            % Find the channel where the waveform has most energy
+            energy_per_channel = zeros(4,1);
+            for j=1:4
+                energy_per_channel(j) = mean(obj.attributes(j).energy(indexer));
+            end
+            [~, max_energy] = max(energy_per_channel);
+
+            % Find the archetype waveform
+            waveform_raw =  mean(squeeze(obj.data(max_energy,:,indexer)),2);
+            waveform = waveform_raw.*obj.settings.ADBitVolts(max_energy)*10^6;
         end
     end
     
